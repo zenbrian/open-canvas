@@ -27,6 +27,8 @@ import {
   LANGCHAIN_USER_ONLY_MODELS,
 } from "@opencanvas/shared/models";
 import { createClient, Session, User } from "@supabase/supabase-js";
+// Importing the MineruService for PDF conversion and image processing
+import { MineruService, PDFConversionResult, ProcessedImage } from "./services/mineruService.js";
 
 export const formatReflections = (
   reflections: Reflections,
@@ -412,6 +414,89 @@ const cleanBase64 = (base64String: string): string => {
   return base64String.replace(/^data:.*?;base64,/, "");
 };
 
+// Create an instance of the MineruService for PDF conversion and image processing
+const mineruService = new MineruService();
+
+
+// Function to check if the model supports vision capabilities
+function supportsVision(modelName: string): boolean {
+  const visionModels = [
+    'gpt-4o', 
+    'gpt-4o-mini', 
+    'gpt-4-vision-preview',
+    'gpt-4-turbo'
+  ];
+  return visionModels.some(model => modelName.includes(model));
+}
+
+export async function convertPDFToMarkdownWithImages(
+  base64PDF: string
+): Promise<PDFConversionResult> {
+  try {
+    if (mineruService.isEnabled()) {
+      console.log('Using Mineru API for PDF conversion');
+      return await mineruService.convertPDFToMarkdownWithImages(base64PDF);
+    } else {
+      console.log('Mineru not available, falling back to text-only conversion');
+      throw new Error('Mineru service not available');
+    }
+  } catch (error) {
+    console.warn('Mineru PDF conversion failed, falling back to pdf-parse:', error);
+    
+    // if Mineru is not available, fallback to pdf-parse
+    const text = await convertPDFToText(base64PDF);
+    return {
+      markdown: `# PDF Content\n\n${text}`,
+      images: [],
+      metadata: {
+        pageCount: 1,
+        processingTime: Date.now(),
+      },
+    };
+  }
+}
+
+// Function to create  content from documents only for OpenAI models
+export async function createOpenAIContentFromDocuments(
+  documents: ContextDocument[],
+  modelName: string
+): Promise<MessageContentComplex[]> {
+  const processedDocs = await createContextDocumentMessagesOpenAI(documents);
+  const content: MessageContentComplex[] = [];
+
+  const hasVisionSupport = supportsVision(modelName);
+
+  processedDocs.forEach((doc) => {
+    if (doc.type === "pdf_enhanced") {
+      // add markdown content
+      content.push({
+        type: "text",
+        text: `PDF Content:\n\n${doc.markdown}`,
+      });
+
+      // if model supports vision, add images
+      if (hasVisionSupport && doc.images && doc.images.length > 0) {
+        doc.images.forEach((image: ProcessedImage) => {
+          content.push({
+            type: "image_url",
+            image_url: {
+              url: `data:${image.type};base64,${image.data}`,
+              detail: "high",
+            },
+          });
+        });
+      }
+    } else if (doc.type === "text") {
+      content.push({
+        type: "text",
+        text: doc.text,
+      });
+    }
+  });
+
+  return content;
+}
+
 export async function convertPDFToText(base64PDF: string) {
   try {
     // Clean the base64 input first
@@ -493,19 +578,40 @@ export async function createContextDocumentMessagesOpenAI(
   documents: ContextDocument[]
 ) {
   const messagesPromises = documents.map(async (doc) => {
-    let text = "";
-
     if (doc.type === "application/pdf") {
-      text = await convertPDFToText(doc.data);
+      // 嘗試使用新的 PDF 轉換方法
+      try {
+        const pdfResult = await convertPDFToMarkdownWithImages(doc.data);
+        return {
+          pdfResult, // 保存完整結果供後續使用
+          type: "pdf_enhanced",
+          markdown: pdfResult.markdown,
+          images: pdfResult.images,
+        };
+      } catch (error) {
+        console.warn('Enhanced PDF conversion failed, using fallback:', error);
+        // 降級到原有方法
+        const text = await convertPDFToText(doc.data);
+        return {
+          type: "text",
+          text,
+        };
+      }
     } else if (doc.type.startsWith("text/")) {
-      text = atob(cleanBase64(doc.data));
+      return {
+        type: "text",
+        text: atob(cleanBase64(doc.data)),
+      };
     } else if (doc.type === "text") {
-      text = doc.data;
+      return {
+        type: "text",
+        text: doc.data,
+      };
     }
 
     return {
       type: "text",
-      text,
+      text: "",
     };
   });
 
@@ -543,8 +649,23 @@ export async function createContextDocumentMessages(
 
   let contextDocumentMessages: Record<string, any>[] = [];
   if (modelProvider === "openai") {
-    contextDocumentMessages =
-      await createContextDocumentMessagesOpenAI(documents);
+    // 使用新的 OpenAI 智能內容組合
+    const openAIContent = await createOpenAIContentFromDocuments(documents, modelName);
+    if (openAIContent.length > 0) {
+      return [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Use the file(s) and/or text below as context when generating your response.",
+            },
+            ...openAIContent,
+          ],
+        },
+      ];
+    }
+    return [];
   } else if (modelProvider === "anthropic") {
     const nativeSupport = modelName.includes("3-5-sonnet");
     contextDocumentMessages = await createContextDocumentMessagesAnthropic(

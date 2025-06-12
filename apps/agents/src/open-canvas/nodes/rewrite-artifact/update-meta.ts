@@ -59,6 +59,6 @@ export async function optionallyUpdateArtifactMeta(
     },
     recentHumanMessage,
   ]);
-
+  // @ts-ignore
   return optionallyUpdateArtifactResponse;
 }

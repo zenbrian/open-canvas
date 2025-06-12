@@ -14,12 +14,11 @@
   "scripts": {
     "dev": "yarn langgraphjs dev --port 54367 --config ../../langgraph.json --no-browser",
     "build": "yarn clean && tsc",
-    "clean": "rm -rf ./dist .turbo || true",
+    "clean": "yarn add -D rimraf -W",
     "format": "prettier --config .prettierrc --write \"src\" \"scripts\"",
     "format:check": "prettier --config .prettierrc --check \"src\" \"scripts\"",
     "lint": "eslint src",
-    "lint:fix": "eslint src --fix",
-    "postinstall": "yarn turbo build"
+    "lint:fix": "eslint src --fix"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",
@@ -38,7 +37,7 @@
     "@opencanvas/shared": "*",
     "@supabase/supabase-js": "^2.45.5",
     "date-fns": "^4.1.0",
-    "dotenv": "^16.4.5",
+    "dotenv": "^16.5.0",
     "exa-js": "^1.4.10",
     "framer-motion": "^11.11.9",
     "groq-sdk": "^0.13.0",
@@ -47,6 +46,7 @@
     "lodash": "^4.17.21",
     "pdf-parse": "^1.1.1",
     "uuid": "^10.0.0",
+    "yauzl": "^3.2.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -57,11 +57,13 @@
     "@types/node": "^20",
     "@types/pdf-parse": "^1.1.4",
     "@types/uuid": "^10.0.0",
+    "@types/yauzl": "^2.10.3",
     "@typescript-eslint/eslint-plugin": "^8.12.2",
     "@typescript-eslint/parser": "^8.8.1",
     "eslint": "^8",
     "eslint-plugin-unused-imports": "^4.1.4",
     "prettier": "^3.3.3",
+    "rimraf": "^6.0.1",
     "tsx": "^4.19.1",
     "turbo": "latest",
     "typescript": "^5",

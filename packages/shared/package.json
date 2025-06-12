@@ -26,7 +26,7 @@
   "private": true,
   "scripts": {
     "build": "yarn clean && tsc",
-    "clean": "rm -rf ./dist .turbo || true",
+    "clean": "yarn add -D rimraf -W",
     "format": "prettier --config .prettierrc --write \"src\"",
     "format:check": "prettier --config .prettierrc --check \"src\"",
     "lint": "eslint src",
@@ -43,6 +43,7 @@
     "eslint-plugin-unused-imports": "^4.1.4",
     "prettier": "^3.3.3",
     "react": "^19.0.0",
+    "rimraf": "^6.0.1",
     "tsx": "^4.19.1",
     "turbo": "latest",
     "typescript": "^5",
