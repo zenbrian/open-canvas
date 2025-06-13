@@ -1,6 +1,6 @@
 import { config } from 'dotenv';
 import { join } from 'path';
-import yauzl from 'yauzl';
+import JSZip from 'jszip';
 
 // load env 
 try {
@@ -11,7 +11,7 @@ try {
   config();
 }
 
-//schemas
+// 保持與原版相容的介面
 export interface ProcessedImage {
   id: string;
   name: string;
@@ -22,7 +22,7 @@ export interface ProcessedImage {
 
 export interface PDFConversionResult {
   markdown: string;
-  images: ProcessedImage[];
+  images: ProcessedImage[]; // 保持原介面，但實際會是空陣列
   metadata?: {
     pageCount: number;
     title?: string;
@@ -67,7 +67,7 @@ export class MineruService {
   private enabled: boolean;
 
   constructor() {
-    this.apiUrl = process.env.MINERU_API_URL || '';
+    this.apiUrl = process.env.MINERU_API_URL || 'https://mineru.net/api/v4';
     this.apiToken = process.env.MINERU_API_TOKEN || '';
     this.enabled = process.env.MINERU_ENABLED === 'true';
   }
@@ -207,7 +207,7 @@ export class MineruService {
   }
 
   /**
-   * download and parse the result ZIP file
+   * download and parse the result ZIP file (僅 Markdown)
    */
   async downloadAndParseResult(zipUrl: string): Promise<PDFConversionResult> {
     const response = await fetch(zipUrl);
@@ -220,241 +220,56 @@ export class MineruService {
   }
 
   /**
-   * Parse the content of the ZIP file
-   * This function extracts markdown and images from the ZIP file.
+   * Parse the content of the ZIP file (僅提取 Markdown)
    */
   private async parseZipContent(zipBuffer: ArrayBuffer): Promise<PDFConversionResult> {
     try {
-      console.log('Starting real ZIP content parsing...');
+      console.log('開始解析 ZIP 檔案...');
       
-      const { markdownContent, images } = await this.extractZipContent(zipBuffer);
+      const zip = new JSZip();
+      const zipContents = await zip.loadAsync(zipBuffer);
+
+      // 尋找 Markdown 檔案
+      let markdownContent = '';
       
-      let finalMarkdown = markdownContent;
-      if (!finalMarkdown.trim()) {
-        if (images.length > 0) {
-          finalMarkdown = `# PDF Content\n\nThis PDF contains ${images.length} image(s). The images have been extracted and can be processed by vision-capable models.\n`;
-          images.forEach((img, index) => {
-            finalMarkdown += `\n## Image ${index + 1}: ${img.name}\n`;
-            if (img.pageNumber) {
-              finalMarkdown += `- Page: ${img.pageNumber}\n`;
-            }
-          });
-        } else {
-          finalMarkdown = '# PDF Content\n\nNo readable content found in this PDF.';
-        }
+      // find full.md
+      const fullMdFile = zipContents.file('full.md');
+      if (fullMdFile) {
+        markdownContent = await fullMdFile.async('text');
+        console.log(`找到 full.md，長度: ${markdownContent.length} 字符`);
+      } else {
+        throw new Error(`Failed to find full.md in ZIP file`);
+      }
+
+      if (!markdownContent.trim()) {
+        markdownContent = '# PDF 內容\n\n無法提取可讀內容，這可能是因為 PDF 格式不支援或檔案損壞。';
       }
       
       const result: PDFConversionResult = {
-        markdown: finalMarkdown,
-        images: images,
+        markdown: markdownContent,
+        images: [], // 空陣列，保持介面相容性
         metadata: {
-          pageCount: Math.max(1, ...images.map(img => img.pageNumber || 1)),
+          pageCount: 1, // 預設值
           processingTime: Date.now(),
-          title: this.extractTitleFromMarkdown(finalMarkdown),
+          title: this.extractTitleFromMarkdown(markdownContent),
         },
       };
       
-      console.log(`ZIP parsing successful: ${result.markdown.length} chars markdown, ${result.images.length} images`);
+      console.log(`ZIP 解析成功: ${result.markdown.length} 字符 markdown`);
       return result;
       
     } catch (error) {
-      console.error('Error parsing ZIP content:', error);
+      console.error('解析 ZIP 檔案失敗:', error);
       
       return {
-        markdown: `# PDF Processing Error\n\nFailed to parse PDF content: ${error instanceof Error ? error.message : 'Unknown error'}\n\nThis may be due to an unsupported PDF format or corrupted file.`,
-        images: [],
+        markdown: `# PDF 處理錯誤\n\n無法解析 PDF 內容: ${error instanceof Error ? error.message : '未知錯誤'}\n\n這可能是因為 PDF 格式不支援或檔案損壞。`,
+        images: [], // 空陣列，保持介面相容性
         metadata: {
           pageCount: 1,
           processingTime: Date.now(),
         },
       };
     }
-  }
-
-  private async extractZipContent(zipBuffer: ArrayBuffer): Promise<{
-    markdownContent: string;
-    images: ProcessedImage[];
-  }> {
-    return new Promise((resolve, reject) => {
-      const buffer = Buffer.from(zipBuffer);
-      
-      yauzl.fromBuffer(buffer, { lazyEntries: true }, (err, zipfile) => {
-        if (err) {
-          reject(new Error(`Failed to open ZIP file: ${err.message}`));
-          return;
-        }
-
-        if (!zipfile) {
-          reject(new Error('Failed to create zipfile instance'));
-          return;
-        }
-
-        const images: ProcessedImage[] = [];
-        let markdownContent = '';
-        let processedEntries = 0;
-        let totalEntries = 0;
-
-        const countEntries = () => {
-          zipfile.readEntry();
-        };
-
-        zipfile.on('entry', (_entry) => {
-          totalEntries++;
-          zipfile.readEntry();
-        });
-
-        zipfile.on('end', () => {
-          yauzl.fromBuffer(buffer, { lazyEntries: true }, (err2, zipfile2) => {
-            if (err2 || !zipfile2) {
-              reject(new Error('Failed to reopen ZIP file for processing'));
-              return;
-            }
-
-            zipfile2.readEntry();
-
-            zipfile2.on('entry', (entry) => {
-              const fileName = entry.fileName;
-              console.log(`Processing ZIP entry: ${fileName}`);
-
-              if (fileName.endsWith('/')) {
-                processedEntries++;
-                if (processedEntries >= totalEntries) {
-                  resolve({ markdownContent, images });
-                } else {
-                  zipfile2.readEntry();
-                }
-                return;
-              }
-
-              zipfile2.openReadStream(entry, (err, readStream) => {
-                if (err) {
-                  console.error(`Error reading ${fileName}:`, err);
-                  processedEntries++;
-                  if (processedEntries >= totalEntries) {
-                    resolve({ markdownContent, images });
-                  } else {
-                    zipfile2.readEntry();
-                  }
-                  return;
-                }
-
-                if (!readStream) {
-                  console.error(`No read stream for ${fileName}`);
-                  processedEntries++;
-                  if (processedEntries >= totalEntries) {
-                    resolve({ markdownContent, images });
-                  } else {
-                    zipfile2.readEntry();
-                  }
-                  return;
-                }
-
-                const chunks: Buffer[] = [];
-                
-                readStream.on('data', (chunk) => {
-                  chunks.push(chunk);
-                });
-
-                readStream.on('end', () => {
-                  const fileContent = Buffer.concat(chunks);
-                  
-                  try {
-                    if (fileName.endsWith('.md') || fileName.endsWith('.markdown')) {
-                      markdownContent += fileContent.toString('utf8') + '\n\n';
-                      console.log(`Found markdown file: ${fileName}, length: ${fileContent.length}`);
-                    } 
-                    else if (fileName.match(/\.(jpg|jpeg|png|gif|webp|bmp)$/i)) {
-                      const base64Data = fileContent.toString('base64');
-                      const mimeType = this.getMimeTypeFromExtension(fileName);
-                      
-                      images.push({
-                        id: `img_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                        name: fileName,
-                        type: mimeType,
-                        data: base64Data,
-                        pageNumber: this.extractPageNumberFromFileName(fileName),
-                      });
-                      
-                      console.log(`Found image: ${fileName}, size: ${fileContent.length} bytes`);
-                    }
-                    else if (fileName.endsWith('.json')) {
-                      try {
-                        const jsonData = JSON.parse(fileContent.toString('utf8'));
-                        console.log(`Found metadata JSON: ${fileName}`, Object.keys(jsonData));
-                      } catch (jsonErr) {
-                        console.warn(`Failed to parse JSON ${fileName}:`, jsonErr);
-                      }
-                    }
-                    else {
-                      console.log(`Skipping unknown file type: ${fileName}`);
-                    }
-                  } catch (parseError) {
-                    console.error(`Error processing ${fileName}:`, parseError);
-                  }
-
-                  processedEntries++;
-                  
-                  if (processedEntries >= totalEntries) {
-                    console.log(`ZIP parsing complete. Found ${images.length} images, markdown length: ${markdownContent.length}`);
-                    resolve({ markdownContent, images });
-                  } else {
-                    zipfile2.readEntry();
-                  }
-                });
-
-                readStream.on('error', (streamErr) => {
-                  console.error(`Stream error for ${fileName}:`, streamErr);
-                  processedEntries++;
-                  if (processedEntries >= totalEntries) {
-                    resolve({ markdownContent, images });
-                  } else {
-                    zipfile2.readEntry();
-                  }
-                });
-              });
-            });
-
-            zipfile2.on('end', () => {
-              if (totalEntries === 0) {
-                console.log('ZIP file is empty');
-                resolve({ markdownContent: '', images: [] });
-              }
-            });
-
-            zipfile2.on('error', (zipErr) => {
-              console.error('ZIP file error:', zipErr);
-              reject(zipErr);
-            });
-          });
-        });
-
-        countEntries();
-      });
-    });
-  }
-
-  private getMimeTypeFromExtension(fileName: string): string {
-    const ext = fileName.toLowerCase().split('.').pop();
-    switch (ext) {
-      case 'jpg':
-      case 'jpeg':
-        return 'image/jpeg';
-      case 'png':
-        return 'image/png';
-      case 'gif':
-        return 'image/gif';
-      case 'webp':
-        return 'image/webp';
-      case 'bmp':
-        return 'image/bmp';
-      default:
-        return 'image/jpeg';
-    }
-  }
-
-  private extractPageNumberFromFileName(fileName: string): number | undefined {
-    const match = fileName.match(/page[_-]?(\d+)|(\d+)[_-]?page/i);
-    return match ? parseInt(match[1] || match[2]) : undefined;
   }
 
   /**
@@ -466,22 +281,25 @@ export class MineruService {
   }
 
   /**
-   * Full process to convert PDF to Markdown with images
+   * Full process to convert PDF to Markdown (簡化版本)
    */
-  async convertPDFToMarkdownWithImages(base64PDF: string): Promise<PDFConversionResult> {
+  async convertPDFToMarkdown(base64PDF: string): Promise<PDFConversionResult> {
     try {
       const fileName = `document_${Date.now()}.pdf`;
       const { batchId, uploadUrl } = await this.requestUploadUrl(fileName);
       
+      console.log(`開始上傳 PDF: ${fileName}`);
       await this.uploadFile(uploadUrl, base64PDF);
       
+      console.log(`等待處理完成: ${batchId}`);
       const zipUrl = await this.waitForBatchCompletion(batchId);
       
+      console.log(`下載並解析結果...`);
       const result = await this.downloadAndParseResult(zipUrl);
       
       return result;
     } catch (error) {
-      console.error('Mineru PDF conversion failed:', error);
+      console.error('Mineru PDF 轉換失敗:', error);
       throw error;
     }
   }
@@ -491,5 +309,10 @@ export class MineruService {
    */
   private cleanBase64(base64String: string): string {
     return base64String.replace(/^data:.*?;base64,/, '');
+  }
+
+  // 保持與原版相容的方法名稱
+  async convertPDFToMarkdownWithImages(base64PDF: string): Promise<PDFConversionResult> {
+    return this.convertPDFToMarkdown(base64PDF);
   }
 }

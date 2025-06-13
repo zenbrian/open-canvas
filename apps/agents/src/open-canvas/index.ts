@@ -1,3 +1,4 @@
+import { directPDFToArtifact } from "./nodes/directPDFToArtifact.js";
 import { Command, END, Send, START, StateGraph } from "@langchain/langgraph";
 import { DEFAULT_INPUTS } from "@opencanvas/shared/constants";
 import { customAction } from "./nodes/customAction.js";
@@ -110,6 +111,7 @@ const builder = new StateGraph(OpenCanvasGraphAnnotation)
   .addNode("generatePath", generatePath)
   .addEdge(START, "generatePath")
   // Nodes
+  .addNode("directPDFToArtifact", directPDFToArtifact)
   .addNode("replyToGeneralInput", replyToGeneralInput)
   .addNode("rewriteArtifact", rewriteArtifact)
   .addNode("rewriteArtifactTheme", rewriteArtifactTheme)
@@ -136,6 +138,7 @@ const builder = new StateGraph(OpenCanvasGraphAnnotation)
     "customAction",
     "updateHighlightedText",
     "webSearch",
+    "directPDFToArtifact", // added for direct PDF to artifact conversion
   ])
   // Edges
   .addEdge("generateArtifact", "generateFollowup")
@@ -146,6 +149,7 @@ const builder = new StateGraph(OpenCanvasGraphAnnotation)
   .addEdge("rewriteCodeArtifactTheme", "generateFollowup")
   .addEdge("customAction", "generateFollowup")
   .addEdge("webSearch", "routePostWebSearch")
+  .addEdge("directPDFToArtifact", "generateFollowup") // Direct PDF to Artifact conversion
   // End edges
   .addEdge("replyToGeneralInput", "cleanState")
   // Only reflect if an artifact was generated/updated.

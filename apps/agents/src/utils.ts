@@ -27,8 +27,8 @@ import {
   LANGCHAIN_USER_ONLY_MODELS,
 } from "@opencanvas/shared/models";
 import { createClient, Session, User } from "@supabase/supabase-js";
-// Importing the MineruService for PDF conversion and image processing
-import { MineruService, PDFConversionResult, ProcessedImage } from "./services/mineruService.js";
+// Importing the MineruService for PDF conversion (without images)
+import { MineruService, PDFConversionResult } from "./services/mineruService.js";
 
 export const formatReflections = (
   reflections: Reflections,
@@ -414,28 +414,17 @@ const cleanBase64 = (base64String: string): string => {
   return base64String.replace(/^data:.*?;base64,/, "");
 };
 
-// Create an instance of the MineruService for PDF conversion and image processing
+// Create an instance of the MineruService for PDF conversion (without images)
 const mineruService = new MineruService();
 
-
-// Function to check if the model supports vision capabilities
-function supportsVision(modelName: string): boolean {
-  const visionModels = [
-    'gpt-4o', 
-    'gpt-4o-mini', 
-    'gpt-4-vision-preview',
-    'gpt-4-turbo'
-  ];
-  return visionModels.some(model => modelName.includes(model));
-}
-
-export async function convertPDFToMarkdownWithImages(
+// 簡化版本：移除圖片處理相關功能
+export async function convertPDFToMarkdown(
   base64PDF: string
 ): Promise<PDFConversionResult> {
   try {
     if (mineruService.isEnabled()) {
       console.log('Using Mineru API for PDF conversion');
-      return await mineruService.convertPDFToMarkdownWithImages(base64PDF);
+      return await mineruService.convertPDFToMarkdown(base64PDF);
     } else {
       console.log('Mineru not available, falling back to text-only conversion');
       throw new Error('Mineru service not available');
@@ -447,54 +436,13 @@ export async function convertPDFToMarkdownWithImages(
     const text = await convertPDFToText(base64PDF);
     return {
       markdown: `# PDF Content\n\n${text}`,
-      images: [],
+      images: [], // 保持介面一致性
       metadata: {
         pageCount: 1,
         processingTime: Date.now(),
       },
     };
   }
-}
-
-// Function to create  content from documents only for OpenAI models
-export async function createOpenAIContentFromDocuments(
-  documents: ContextDocument[],
-  modelName: string
-): Promise<MessageContentComplex[]> {
-  const processedDocs = await createContextDocumentMessagesOpenAI(documents);
-  const content: MessageContentComplex[] = [];
-
-  const hasVisionSupport = supportsVision(modelName);
-
-  processedDocs.forEach((doc) => {
-    if (doc.type === "pdf_enhanced") {
-      // add markdown content
-      content.push({
-        type: "text",
-        text: `PDF Content:\n\n${doc.markdown}`,
-      });
-
-      // if model supports vision, add images
-      if (hasVisionSupport && doc.images && doc.images.length > 0) {
-        doc.images.forEach((image: ProcessedImage) => {
-          content.push({
-            type: "image_url",
-            image_url: {
-              url: `data:${image.type};base64,${image.data}`,
-              detail: "high",
-            },
-          });
-        });
-      }
-    } else if (doc.type === "text") {
-      content.push({
-        type: "text",
-        text: doc.text,
-      });
-    }
-  });
-
-  return content;
 }
 
 export async function convertPDFToText(base64PDF: string) {
@@ -574,19 +522,18 @@ export function createContextDocumentMessagesGemini(
   });
 }
 
+// 簡化版本：移除圖片處理，只保留 Markdown 內容
 export async function createContextDocumentMessagesOpenAI(
   documents: ContextDocument[]
 ) {
   const messagesPromises = documents.map(async (doc) => {
     if (doc.type === "application/pdf") {
-      // 嘗試使用新的 PDF 轉換方法
+      // 使用簡化的 PDF 轉換方法（只有 Markdown）
       try {
-        const pdfResult = await convertPDFToMarkdownWithImages(doc.data);
+        const pdfResult = await convertPDFToMarkdown(doc.data);
         return {
-          pdfResult, // 保存完整結果供後續使用
-          type: "pdf_enhanced",
-          markdown: pdfResult.markdown,
-          images: pdfResult.images,
+          type: "text",
+          text: `PDF Content:\n\n${pdfResult.markdown}`,
         };
       } catch (error) {
         console.warn('Enhanced PDF conversion failed, using fallback:', error);
@@ -594,7 +541,7 @@ export async function createContextDocumentMessagesOpenAI(
         const text = await convertPDFToText(doc.data);
         return {
           type: "text",
-          text,
+          text: `PDF Content:\n\n${text}`,
         };
       }
     } else if (doc.type.startsWith("text/")) {
@@ -631,6 +578,7 @@ async function getContextDocuments(
   return result?.value?.documents || [];
 }
 
+// 簡化版本：移除複雜的圖片處理邏輯
 export async function createContextDocumentMessages(
   config: LangGraphRunnableConfig,
   contextDocuments?: ContextDocument[]
@@ -648,24 +596,9 @@ export async function createContextDocumentMessages(
   }
 
   let contextDocumentMessages: Record<string, any>[] = [];
+  
   if (modelProvider === "openai") {
-    // 使用新的 OpenAI 智能內容組合
-    const openAIContent = await createOpenAIContentFromDocuments(documents, modelName);
-    if (openAIContent.length > 0) {
-      return [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Use the file(s) and/or text below as context when generating your response.",
-            },
-            ...openAIContent,
-          ],
-        },
-      ];
-    }
-    return [];
+    contextDocumentMessages = await createContextDocumentMessagesOpenAI(documents);
   } else if (modelProvider === "anthropic") {
     const nativeSupport = modelName.includes("3-5-sonnet");
     contextDocumentMessages = await createContextDocumentMessagesAnthropic(
@@ -684,6 +617,7 @@ export async function createContextDocumentMessages(
     role: "user";
     content: MessageContentComplex[];
   }> = [];
+  
   if (contextDocumentMessages?.length) {
     contextMessages = [
       {
@@ -760,3 +694,6 @@ export function getStringFromContent(content: MessageContent): string {
     .flatMap((c) => ("text" in c ? (c.text as string) : []))
     .join("\n");
 }
+
+// 保持向後相容性的別名
+export const convertPDFToMarkdownWithImages = convertPDFToMarkdown;

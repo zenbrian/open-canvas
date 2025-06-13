@@ -71,6 +71,14 @@ export const OpenCanvasGraphAnnotation = Annotation.Root({
     },
     default: () => [],
   }),
+
+  /**
+   * 直接从 PDF 提取的 Markdown 内容，无需 AI 处理
+   */
+  directPDFMarkdown: Annotation<{
+    markdown: string;
+    fileName: string;
+  } | undefined>,
   /**
    * The part of the artifact the user highlighted. Use the `selectedArtifactId`
    * to determine which artifact the highlight belongs to.
